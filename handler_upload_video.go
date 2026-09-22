@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"path"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -64,7 +65,8 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	tmpFile, err := os.CreateTemp("", "tubely-upload.mp4")
+	filename := "tubely-upload.mp4"
+	tmpFile, err := os.CreateTemp("", filename)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Creating temp file error", err)
 		return
@@ -84,12 +86,19 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	aspect, err := getVideoAspectRatio(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "File error", err)
+		return
+	}
+
 	keyVar := make([]byte, 32)
 	_, err = rand.Read(keyVar)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Generating random key error", err)
 	}
 	key := base32.HexEncoding.EncodeToString(keyVar)
+	key = path.Join(aspect, key)
 
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
