@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"mime"
@@ -52,7 +54,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	mediaTypeStr := fileHeader.Header.Get("Content-Type")
 	mediaType, _, err := mime.ParseMediaType(mediaTypeStr)
-	if err != nil || mediaType != "image/jpeg" || mediaType != "image/png" {
+	if err != nil || (mediaType != "image/jpeg" && mediaType != "image/png") {
 		respondWithError(w, http.StatusBadRequest, "Wrong media type", err)
 		return
 	}
@@ -72,17 +74,29 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 
 	if userID != vMetadata.UserID {
-		respondWithError(w, http.StatusForbidden, "Wrong user id", err)
+		respondWithError(w, http.StatusUnauthorized, "Wrong user id", err)
 		return
 	}
 
-	relImgPath := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%s.%s", videoIDString, extType))
+	rndBytes := make([]byte, 32)
+	_, err = rand.Read(rndBytes)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Generating random key error", err)
+		return
+	}
+	encoded := base64.RawURLEncoding.EncodeToString(rndBytes)
+
+	relImgPath := filepath.Join(cfg.assetsRoot, fmt.Sprintf("%s.%s", encoded, extType))
 	file, err := os.Create(relImgPath)
 	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Creating file failed", err)
+		return
 	}
 
 	n, err := io.Copy(file, bytes.NewBuffer(imgData))
 	if err != nil || n != int64(len(imgData)) {
+		respondWithError(w, http.StatusInternalServerError, "Saving video failed", err)
+		return
 	}
 
 	fullImgPath := fmt.Sprintf("http://localhost:%s/%s", cfg.port, relImgPath)
@@ -90,6 +104,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	err = cfg.db.UpdateVideo(vMetadata)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Updating video failed", err)
+		return
 	}
 
 
