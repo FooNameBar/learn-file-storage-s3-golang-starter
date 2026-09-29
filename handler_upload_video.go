@@ -92,6 +92,21 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	fastStartStr, err := processVideoForFastStart(tmpFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Fast start processing error", err)
+		return
+	}
+
+	fastStartFile, err := os.Open(fastStartStr)
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Opening file error", err)
+		return
+	}
+	defer os.Remove(fastStartFile.Name())
+	defer fastStartFile.Close()
+
+
 	keyVar := make([]byte, 32)
 	_, err = rand.Read(keyVar)
 	if err != nil {
@@ -103,7 +118,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
 		Key:         &key,
-		Body:        tmpFile,
+		Body:        fastStartFile,
 		ContentType: &mediaType,
 		ContentLength: &written,
 	})
