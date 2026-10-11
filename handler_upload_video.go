@@ -55,6 +55,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	defer file.Close()
+
 	limitedFile := http.MaxBytesReader(w, file, MAX_BYTES)
 	defer limitedFile.Close()
 
@@ -74,15 +75,9 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	defer os.Remove(tmpFile.Name())
 	defer tmpFile.Close()
 
-	written, err := io.Copy(tmpFile, limitedFile)
+	_, err = io.Copy(tmpFile, limitedFile)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Copying file error", err)
-		return
-	}
-
-	_, err = tmpFile.Seek(0, io.SeekStart)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Resetting file pointer error", err)
 		return
 	}
 
@@ -106,32 +101,53 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	defer os.Remove(fastStartFile.Name())
 	defer fastStartFile.Close()
 
+	_, err = fastStartFile.Seek(0, io.SeekStart)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Resetting file pointer error", err)
+		return
+	}
 
 	keyVar := make([]byte, 32)
 	_, err = rand.Read(keyVar)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Generating random key error", err)
+		return
 	}
 	key := base32.HexEncoding.EncodeToString(keyVar)
 	key = path.Join(aspect, key)
 
+	stat, err := fastStartFile.Stat()
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "File stat error", err)
+		return
+	}
+	contentLength := stat.Size()
+
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
-		Bucket:      &cfg.s3Bucket,
-		Key:         &key,
-		Body:        fastStartFile,
-		ContentType: &mediaType,
-		ContentLength: &written,
+		Bucket:        &cfg.s3Bucket,
+		Key:           &key,
+		Body:          fastStartFile,
+		ContentType:   &mediaType,
+		ContentLength: &contentLength,
 	})
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Storing video on server error", err)
 		return
 	}
 
-	url := fmt.Sprintf("https://%s.s3.%s.amazonaws.com/%s", cfg.s3Bucket, cfg.s3Region, key)
+	url := fmt.Sprintf("%s,%s", cfg.s3Bucket, key)
 	metadata.VideoURL = &url
 	err = cfg.db.UpdateVideo(metadata)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Updating video infor error", err)
 		return
 	}
+
+	presigned, err := cfg.dbVideoToSignedVideo(metadata)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "%w", err)
+		return
+	}
+
+	respondWithJSON(w, http.StatusOK, presigned)
 }
